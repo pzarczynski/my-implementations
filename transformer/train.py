@@ -1,13 +1,12 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
-from torchmetrics import Accuracy
-from torch.nn.utils.rnn import pad_sequence
 import random
 
 import matplotlib.pyplot as plt
-
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import DataLoader, TensorDataset
+from torchmetrics import Accuracy
 from tqdm import tqdm
 
 from transformer import Transformer
@@ -31,8 +30,9 @@ def generate_examples(n, voc_size, seq_len):
     srcs, tgts = [], []
 
     for _ in range(n):
-        src = [random.randint(3, voc_size - 1) 
-               for _ in range(random.randint(0, seq_len))]
+        src = [
+            random.randint(3, voc_size - 1) for _ in range(random.randint(0, seq_len))
+        ]
 
         tgt = torch.tensor([1] + src[::-1] + [2], dtype=torch.int64)
         tgts.append(tgt)
@@ -48,7 +48,7 @@ def generate_examples(n, voc_size, seq_len):
 def validate_model(model, loader, device, num_classes):
     accuracy = Accuracy(task="multiclass", ignore_index=0, num_classes=num_classes)
     accuracy = accuracy.to(device)
-    
+
     model.eval()
 
     for src, tgt in tqdm(loader):
@@ -65,7 +65,7 @@ def validate_model(model, loader, device, num_classes):
 
 class TransformerModel(nn.Module):
     """example transformer architecture."""
-    
+
     def __init__(self, embed_dim, hidden_dim, nhead, nlayers, vocab_size):
         super().__init__()
         self.emb = nn.Embedding(vocab_size, embed_dim)
@@ -142,7 +142,7 @@ if __name__ == "__main__":
 
     optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
     criterion = nn.CrossEntropyLoss(ignore_index=0)
-    
+
     epoch_loss = []
     epoch_acc = []
 
@@ -176,9 +176,9 @@ if __name__ == "__main__":
         print(f"Epoch {epoch+1} val accuracy: {val_acc}")
         epoch_acc.append(val_acc.cpu())
 
-    plt.plot(epoch_loss, label='loss')
-    plt.plot(epoch_acc, label='accuracy')
-    plt.xlabel('epochs')
-    
+    plt.plot(epoch_loss, label="loss")
+    plt.plot(epoch_acc, label="accuracy")
+    plt.xlabel("epochs")
+
     plt.legend()
     plt.savefig("training_curve.png")
