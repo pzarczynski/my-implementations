@@ -159,8 +159,7 @@ class PositionalEncoding(nn.Module):
         self.register_buffer("pe", pe)
 
     def forward(self, x):
-        seq_len = x.size(1)
-        return x + self.pe[:, :seq_len]
+        return x + self.pe[:, :x.size(1)]
 
 
 class Transformer(nn.Module):
@@ -171,7 +170,7 @@ class Transformer(nn.Module):
         self.encoder = Encoder(embed_dim, hidden_dim, num_heads, num_layers)
         self.decoder = Decoder(embed_dim, hidden_dim, num_heads, num_layers)
 
-    def _casual_mask(self, size):
+    def _causal_mask(self, size):
         return torch.tril(torch.ones(size, size))
 
     def forward(self, src, tgt, src_padding_mask, tgt_padding_mask):
@@ -181,7 +180,7 @@ class Transformer(nn.Module):
         context = self.encoder(src, src_padding_mask)
 
         # casual mask prevents future keys from attending to queries
-        attn_mask = self._casual_mask(tgt.size(1)).to(tgt.device)
+        attn_mask = self._causal_mask(tgt.size(1)).to(tgt.device)
 
         out = self.decoder(tgt, context, attn_mask, src_padding_mask, tgt_padding_mask)
         return out

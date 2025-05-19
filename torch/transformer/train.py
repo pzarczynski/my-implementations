@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from torchmetrics import Accuracy
 from tqdm import tqdm
 
-from transformer import Transformer
+from .transformer import Transformer
 
 EPOCHS = 5
 TRAIN_SIZE = 10000
@@ -106,7 +106,7 @@ class TransformerModel(nn.Module):
             # tokens one-by-one and cannot 'peek' at future tokens
             # but the model shows better performance with it, probably due to
             # numerical stability or some other phenomenon I can't yet understand
-            attn_mask = self.transformer._casual_mask(tgt.size(1)).to(src.device)
+            attn_mask = self.transformer._causal_mask(tgt.size(1)).to(src.device)
 
             # tgt_padding_mask isn't needed as <EOS> token appears prior to the padding
             preds = self.transformer.decoder(
