@@ -1,0 +1,11 @@
+chex==0.1.89
+flax==0.10.6
+jax==0.6.0
+matplotlib==3.10.3
+numpy==2.2.6
+omegaconf==2.3.0
+optax==0.2.4
+torch==2.7.0
+torchmetrics==1.7.1
+torchvision==0.22.0
+tqdm==4.67.1
