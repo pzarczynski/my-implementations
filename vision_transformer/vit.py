@@ -11,14 +11,14 @@ from dataclasses import dataclass, field
 class ViTConfig:
     """Config class used for ViT initialization."""
     num_heads: int = 8
-    dim_per_head: int = 16
+    dim_per_head: int = 8
     emb_dim: int = field(default=None)
     num_layers: int = 2
     mlp_factor: float = 4.0
     mlp_dim: int = field(default=None)
-    patch_size: int = 8
-    activation: str = 'gelu'
-    dropout_rate: float = 0.2
+    patch_size: int = 4
+    activation: str = F.gelu
+    dropout_rate: float = 0.1
     use_bias: bool = True
     channels: int = 1
     num_classes: int = 10
@@ -38,8 +38,12 @@ class VisionTransformer(nn.Module):
             num_embeddings=1,
             embedding_dim=cfg.emb_dim
         )
-        patch_dim = cfg.channels * cfg.patch_size ** 2
-        self.patch_embeds = nn.Linear(patch_dim, cfg.emb_dim)
+        self.patch_embeds = nn.Conv2d(
+            in_channels=cfg.channels, 
+            out_channels=cfg.emb_dim, 
+            kernel_size=cfg.patch_size, 
+            stride=cfg.patch_size
+        )
         self.pos_embeds = nn.Embedding(
             num_embeddings=cfg.max_len,
             embedding_dim=cfg.emb_dim
@@ -51,7 +55,7 @@ class VisionTransformer(nn.Module):
             nhead=cfg.num_heads, 
             dim_feedforward=cfg.mlp_dim, 
             dropout=cfg.dropout_rate,
-            activation = getattr(F, cfg.activation),
+            activation = cfg.activation,
             batch_first=True,
             bias=cfg.use_bias,
         )
@@ -59,36 +63,21 @@ class VisionTransformer(nn.Module):
         self.encoder = nn.TransformerEncoder(layer, cfg.num_layers)
         self.cls_norm = nn.LayerNorm(cfg.emb_dim)
         self.out_proj = nn.Linear(cfg.emb_dim, cfg.num_classes, bias=cfg.use_bias)
-        
-    def target_shape(self, x: torch.Tensor) -> tuple[int, int]:
-        p = self.patch_size
-        w = p * math.ceil(x.size(-1) / p)
-        h = p * math.ceil(x.size(-2) / p)
-        return w, h
 
     def pad(self, x: torch.Tensor) -> torch.Tensor:
-        w, h = self.target_shape(x)
-        x = F.pad(x, (0, w - x.size(-1), 0, h - x.size(-2)))
-        return x
-
-    def resize(self, x: torch.Tensor) -> torch.Tensor:
-        w, h = self.target_shape(x)
-        x = F.interpolate(x, (w, h), mode="nearest")
-        return x
-    
-    def split_into_patches(self, x: torch.Tensor) -> torch.Tensor:
-        n = (x.size(-1) * x.size(-2)) // self.patch_size ** 2
-        x = x.reshape((x.size(0), n, -1))
+        p = self.patch_size
+        w_pad = (p - x.size(-1) % p) % p
+        h_pad = (p - x.size(-2) % p) % p
+        x = F.pad(x, (0, w_pad, 0, h_pad))
         return x
 
     def forward(self, x):
-        # Input is resized so that its shape is divisible by P.
-        x = self.resize(x)
+        # Input is padded so that its shape is divisible by P.
+        x = self.pad(x)
 
-        # Data is split into N patches and flattened, 
-        # getting tensor of shape (*B, W*H // P^2, C*P^2)
-        x = self.split_into_patches(x)
-        x = self.patch_embeds(x)
+        # Data is split into patches and flattened.
+        x = self.patch_embeds(x) # B, C, H/P, W/P
+        x = x.view(*x.shape[:2], -1).transpose(-1, -2)
         
         # Add a learned positional encoding like in standard transformer.
         x += self.pos_embeds(torch.arange(x.size(-2), device=x.device))
