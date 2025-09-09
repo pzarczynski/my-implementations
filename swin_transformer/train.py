@@ -5,95 +5,117 @@ import optax
 from jax import lax, random, numpy as jnp
 from flax.training.train_state import TrainState
 
-from models import SwinTransformer, SwinTransformerConfig
-from helpers import *
+from models import SwinTransformer
+from helpers import (load_cifar10, shuffle, batchify, 
+                     compute_accuracy, plot_metrics)
 
 
-def create_train_state(key: chex.PRNGKey, steps_per_epoch: int) -> tuple[TrainState, chex.PRNGKey]:
-    """Create a TrainState from a newly initialized model and return an updated key."""
-    key, init_key, dropout_key = random.split(key, 3)
-    
-    model = SwinTransformer()
-    dummy_input = jnp.ones((64, 28, 28, 1))
-    vars = model.init({'params': init_key, 'dropout': dropout_key}, dummy_input)
-    
-    cosine_kw = [
+def lr_schedule(
+    init_value: float,
+    peak_value: float,
+    num_cycles: int,
+    T_0: int,
+    T_mul: int,
+    T_warmup: int,
+    n_batches: int
+):
+    warmup_steps = T_warmup * n_batches
+    decay_steps = T_0 * n_batches
+    return optax.sgdr_schedule([
         dict(
-            init_value=1e-6, 
-            peak_value=1e-3,
-            warmup_steps=steps_per_epoch * a,
-            decay_steps=steps_per_epoch * b
-        ) for (a, b) in [[5, 30], [0, 60]]
-    ]
-    
-    scheduler = optax.sgdr_schedule(cosine_kw)
-    optimizer = optax.adamw(scheduler, weight_decay=1e-1)
-    
-    state = TrainState.create(
-        apply_fn=model.apply, 
-        params=vars['params'], 
-        tx=optimizer
-    )
-    return state, key
+            init_value=init_value,
+            peak_value=peak_value,
+            warmup_steps=warmup_steps if cycle == 0 else 0,
+            decay_steps=((warmup_steps if cycle == 0 else 0) +
+                         (decay_steps * T_mul ** cycle)),
+            end_value=init_value
+        )
+        for cycle in range(num_cycles)
+    ])
+
+
+def create_train_state(
+    key: chex.PRNGKey, 
+    dummy_input: chex.Array,
+    n_batches: int
+) -> tuple[TrainState, chex.PRNGKey]:
+    """Create a TrainState from a newly initialized model and return an updated key."""
+    model = SwinTransformer()
+    params = model.init(key, dummy_input)['params']
+    schedule = lr_schedule(init_value=1e-6, peak_value=2e-4,
+                           num_cycles=10, T_0=10, T_mul=1.25, 
+                           T_warmup=10, n_batches=n_batches)
+    tx = optax.adamw(schedule, weight_decay=5e-3)
+    state = TrainState.create(apply_fn=model.apply, params=params, tx=tx)
+    return state
 
 
 @jax.jit
 def train_step(
-    statekey: tuple[TrainState, chex.PRNGKey], 
+    keystate: tuple[chex.PRNGKey, TrainState], 
     batch: tuple[chex.Array, ...]
-) -> tuple[tuple[TrainState, chex.PRNGKey], tuple[chex.Array]]:
-    """Perform one training step and return updated state, key and metrics."""
-    state, key = statekey
+) -> tuple[tuple[chex.PRNGKey, TrainState], tuple[chex.Array, chex.Array]]:
+    """Perform one training step aax.debug.nd return updated state, key and metrics."""
+    key, state = keystate
     inputs, labels = batch
-    key, dropout_key = random.split(key)
+    key, drop_key = random.split(key)
     
     def loss_fn(params):
-        logits = state.apply_fn({'params': params}, inputs, rngs={"dropout": dropout_key})
-        loss = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
-        loss = jnp.mean(loss)
-        preds = jnp.argmax(logits, axis=-1)
-        accuracy = jnp.mean(preds == labels)
+        logits = state.apply_fn({'params': params}, inputs, rngs=drop_key)
+        loss = jnp.mean(optax.softmax_cross_entropy(logits, labels))
+        accuracy = compute_accuracy(logits, labels)
         return loss, accuracy
         
     (loss, accuracy), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
     state = state.apply_gradients(grads=grads)
-    return (state, key), (loss, accuracy) 
+    return (key, state), (loss, accuracy) 
 
 
 @jax.jit
-def val_step(state: TrainState, batch: tuple[chex.Array, ...]):
+def val_step(
+    state: TrainState, 
+    batch: tuple[chex.Array, ...]
+) -> tuple[TrainState, chex.Array]:
     """Perform one validation step and return state and metrics."""
     inputs, labels = batch
     logits = state.apply_fn({'params': state.params}, inputs, eval=True)
-    preds = jnp.argmax(logits, axis=-1)
-    accuracy = jnp.mean(preds == labels)
+    accuracy = compute_accuracy(logits, labels)
     return state, accuracy
-    
 
-def train_loop(num_epochs: int, batch_size: int = 128):
-    key = random.key(42)
-    
-    x_train, y_train, x_test, y_test = load_openml('mnist_784')
-    x_train, x_test = x_train.reshape(-1, 28, 28, 1), x_test.reshape(-1, 28, 28, 1)
-    
-    state, key = create_train_state(key, x_train.shape[0] // batch_size)
-    
+
+def train_loop(key: chex.PRNGKey, num_epochs: int, batch_size: int = 128):    
+    x_train, x_test, y_train, y_test = load_cifar10(take=0.1)
     val_dataset = batchify(x_test, y_test, batch_size=batch_size)
-    
-    for epoch in range(num_epochs):
-        train_dataset, key = shuffle(x_train, y_train, key=key)
+
+    def one_epoch(state, epoch: int):
+        shuffle_key, train_key = random.split(random.fold_in(key, epoch))
+        
+        train_dataset = shuffle(shuffle_key, x_train, y_train)
         train_dataset = batchify(*train_dataset, batch_size=batch_size)
         
-        (state, key), (loss, train_acc) = lax.scan(train_step, (state, key), train_dataset)
+        carry = train_key, state
+        (_, state), (loss, train_acc) = lax.scan(train_step, carry, train_dataset)
         _, val_acc = lax.scan(val_step, state, val_dataset)
         
-        loss, train_acc, val_acc = map(jnp.mean, [loss, train_acc, val_acc])
+        metrics = jnp.array([jnp.mean(x) for x in (loss, train_acc, val_acc)])
+        jax.debug.print("Epoch {}: train_loss \t{:.3f}; train_acc \t{:.2%}; val_acc \t{:.2%}", 
+                        epoch, *metrics)
         
-        print("epoch {}: train_loss\t{:.3f}; train_acc\t{:.2%}; val_acc\t{:.2%}"
-              .format(epoch + 1, loss, train_acc, val_acc))
-
-    return state
+        return state, metrics
+    
+    state = create_train_state(
+        key=key, 
+        dummy_input=val_dataset[0][0], 
+        n_batches=x_train.shape[0]//batch_size
+    )
+    state, metrics = lax.scan(one_epoch, state, jnp.arange(1, num_epochs+1))
+    return state, metrics.transpose(1, 0)
 
 
 if __name__ == '__main__':
-    train_loop(90)
+    key = random.key(42)
+    state, (_, *accuracies) = train_loop(key, num_epochs=2)
+    
+    fig = plot_metrics(accuracies, "accuracy")
+    fig.tight_layout()
+    fig.savefig('curve.png')
