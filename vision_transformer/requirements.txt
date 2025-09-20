@@ -1,14 +1,7 @@
-chex
-flax
-gdown
-jax
 matplotlib
 numpy
 omegaconf
-opencv_python
-optax
 seaborn
-scikit_learn
 torch
 torchmetrics
 torchvision

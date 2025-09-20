@@ -1,0 +1,10 @@
+chex
+flax
+gdown
+jax
+matplotlib
+numpy
+opencv_python
+optax
+scikit_learn
+tqdm

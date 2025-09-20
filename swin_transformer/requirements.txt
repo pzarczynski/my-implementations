@@ -1,0 +1,9 @@
+chex
+dm_pix
+flax
+jax
+matplotlib
+numpy
+optax
+scikit_learn
+seaborn
