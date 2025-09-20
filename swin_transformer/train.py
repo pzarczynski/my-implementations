@@ -14,20 +14,20 @@ def create_train_state(key: chex.PRNGKey, steps_per_epoch: int) -> tuple[TrainSt
     key, init_key, dropout_key = random.split(key, 3)
     
     model = SwinTransformer()
-    dummy_input = jnp.ones((64, 28, 28, 1))
+    dummy_input = jnp.ones((64, 32, 32, 3))
     vars = model.init({'params': init_key, 'dropout': dropout_key}, dummy_input)
     
     cosine_kw = [
         dict(
-            init_value=1e-6, 
+            init_value=1e-5, 
             peak_value=1e-3,
             warmup_steps=steps_per_epoch * a,
             decay_steps=steps_per_epoch * b
-        ) for (a, b) in [[5, 30], [0, 60]]
+        ) for (a, b) in [[5, 40], [0, 60]]
     ]
     
     scheduler = optax.sgdr_schedule(cosine_kw)
-    optimizer = optax.adamw(scheduler, weight_decay=1e-1)
+    optimizer = optax.adamw(scheduler, weight_decay=1e-2)
     
     state = TrainState.create(
         apply_fn=model.apply, 
@@ -73,8 +73,9 @@ def val_step(state: TrainState, batch: tuple[chex.Array, ...]):
 def train_loop(num_epochs: int, batch_size: int = 128):
     key = random.key(42)
     
-    x_train, y_train, x_test, y_test = load_openml('mnist_784')
-    x_train, x_test = x_train.reshape(-1, 28, 28, 1), x_test.reshape(-1, 28, 28, 1)
+    x_train, y_train, x_test, y_test = load_openml('cifar_10_small')
+    x_train = x_train.reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
+    x_test = x_test.reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
     
     state, key = create_train_state(key, x_train.shape[0] // batch_size)
     
@@ -96,4 +97,4 @@ def train_loop(num_epochs: int, batch_size: int = 128):
 
 
 if __name__ == '__main__':
-    train_loop(90)
+    train_loop(100)

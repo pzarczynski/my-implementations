@@ -1,25 +1,32 @@
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
+import seaborn as sns
 
 import numpy as np
 
 import chex
 import jax
 
+sns.set_theme(context='paper', style='ticks')
 
-def plot_metrics(metrics):
-    assert 'loss' in metrics
-    
-    fig, ax = plt.subplots(1)
+
+def plot_metrics(metrics):    
     x = np.arange(len(metrics['loss'])) + 1
-
-    for label, y in metrics.items():
-        ax.plot(x, y, marker='o', label=label)
-
-    ax.set_xlabel('epoch')
-    ax.legend()
-    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    return fig, ax
+    
+    def one_plot(m, label: str, ax, c):
+        y = np.array(m[label])
+        sns.lineplot(x=x, y=y, ax=ax, color=c, marker='o')
+        ax.set_ylabel(label.capitalize(), color=c)
+        ax.tick_params(axis='y', colors=c)
+        ax.set_yticks(np.array([y.min(), y.max()]).round(3))
+    
+    fig, ax = plt.subplots()
+    one_plot(metrics, label='loss', ax=ax, c='blue')
+    one_plot(metrics, label='accuracy', ax=ax.twinx(), c='red')
+    
+    ax.set_xlabel("Epoch")
+    fig.tight_layout()
+    sns.despine(fig, right=False)
+    return fig
 
 
 def batchify(dataset: tuple[chex.Array], batch_size: int) -> tuple[chex.Array]:

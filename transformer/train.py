@@ -9,8 +9,8 @@ logging.basicConfig(level=logging.INFO)
 from flax.training.train_state import TrainState
 from omegaconf import DictConfig
 
-from .transformer import Transformer, TransformerConfig
-from .utils import plot_metrics, shuffle, batchify
+from transformer import Transformer, TransformerConfig
+from utils import plot_metrics, shuffle, batchify
 
 
 def generate_dataset(
@@ -135,7 +135,7 @@ def train_loop(cfg: DictConfig):
     val_dataset, key = generate_dataset(int(size * cfg.val_factor), cfg.max_len, cfg.vocab_size, key)
     batched_val_dataset = batchify(val_dataset, cfg.batch_size)
     
-    metrics = {'loss': [], 'accuracy': []}
+    metrics = dict(loss=[], accuracy=[])
 
     for epoch in range(cfg.num_epochs):
         train_dataset, key = shuffle(train_dataset, key)
@@ -166,5 +166,5 @@ if __name__ == "__main__":
     ))
     final_state, metrics = train_loop(cfg)
         
-    fig, ax = plot_metrics(metrics)
+    fig = plot_metrics(metrics)
     fig.savefig('curve.png')

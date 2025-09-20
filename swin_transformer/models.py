@@ -11,13 +11,13 @@ from itertools import product
 
 @dataclass
 class SwinTransformerConfig:
-    input_size: int = 28
-    num_heads: int = 4
+    input_size: int = 32
+    num_heads: int = 8
     emb_dim_per_head: int = 8
-    depths: tuple[int, ...] = (2, 2)
+    depths: tuple[int, ...] = (3, 3)
     num_classes: int = 10
     patch_size: int = 2
-    window_size: int = 7
+    window_size: int = 8
     mlp_factor: float = 4.0
     attn_drop: float = 0.1
     proj_drop: float = 0.1
@@ -77,7 +77,8 @@ class WMSA(nn.Module):
             dropout_rate=cfg.attn_drop,
             attention_fn=partial(
                 nn.dot_product_attention,
-                bias=self.bias_table[:, *self.bias_table_idx],
+                bias=self.bias_table[:, self.bias_table_idx[0], 
+                                     self.bias_table_idx[1]],
             )
         )(x, mask=mask, deterministic=eval)
         
