@@ -1,43 +1,48 @@
-import jax
-import flax.linen as nn
-import chex
-import numpy as np
-
-from jax import random, numpy as jnp
-from flax.struct import dataclass, field
 from functools import partial
 from itertools import product
+
+import chex
+import flax.linen as nn
+import jax
+import numpy as np
+from flax.linen import initializers as init
+from flax.struct import dataclass, field
+from jax import numpy as jnp
+from jax import random
 
 
 @dataclass
 class SwinTransformerConfig:
     input_size: int = 32
-    emb_dim: int = 64
-    heads: tuple[int, ...] = (2, 4)
-    depths: tuple[int, ...] = (2, 2)
+    emb_dim: int = 96
+    heads: tuple[int, ...] = (3, 6, 12)
+    depths: tuple[int, ...] = (2, 6, 4)
+    mlp_factor: float = 2.0
     num_classes: int = 10
     patch_size: int = 2
     window_size: int = 4
-    mlp_factor: float = 4.0
-    drop_rate: float = 0.1
-    stochastic_depth: float = 0.2
+    drop_rate: float = 0.0
+    stochastic_depth: float = 0.1
+    dtype: jnp.dtype = jnp.bfloat16
     mlp_dim: int = field(default=None)
     
     def __post_init__(self) -> None:
         object.__setattr__(self, "mlp_dim", int(self.emb_dim * self.mlp_factor))
+        
 
-
-class MLP(nn.Module):
+class MLP(nn.Module): 
     config: SwinTransformerConfig
     level: int
 
     @nn.compact
     def __call__(self, x: chex.Array, eval: bool = False) -> chex.Array:
         cfg = self.config
-        x = nn.Dense(cfg.mlp_dim * 2**self.level)(x)
+        f = 2 ** self.level
+        x = nn.Dense(features=cfg.mlp_dim * f, dtype=cfg.dtype,
+                     kernel_init=init.he_normal())(x)
         x = nn.gelu(x)
         x = nn.Dropout(cfg.drop_rate)(x, deterministic=eval)
-        x = nn.Dense(cfg.emb_dim * 2**self.level)(x)
+        x = nn.Dense(features=cfg.emb_dim * f, dtype=cfg.dtype)(x)
         x = nn.Dropout(cfg.drop_rate)(x, deterministic=eval)
         return x
 
@@ -64,20 +69,27 @@ class WMSA(nn.Module):
         self.relative_pos += cfg.window_size - 1
     
     @nn.compact
-    def __call__(self, x: chex.Array, mask: chex.Array = None, eval: bool = False) -> chex.Array:
+    def __call__(
+        self, 
+        x: chex.Array, 
+        mask: chex.Array = None, 
+        eval: bool = False
+    ) -> chex.Array:
         cfg = self.config
         
         x = nn.SelfAttention(
             num_heads=cfg.heads[self.level], 
+            dtype=cfg.dtype,
             qkv_features=self.scaled_emb_dim, 
             dropout_rate=cfg.drop_rate,
+            force_fp32_for_softmax=True,
             attention_fn=partial(
                 nn.dot_product_attention,
                 bias=self.bias_table[:, *self.relative_pos],
-            )
+            ),
         )(x, mask=mask, deterministic=eval)
         
-        x = nn.Dense(self.scaled_emb_dim)(x)
+        x = nn.Dense(self.scaled_emb_dim, dtype=cfg.dtype)(x)
         x = nn.Dropout(cfg.drop_rate)(x, deterministic=eval)
         return x
     
@@ -103,10 +115,10 @@ class StochasticDepth(nn.Module):
     def __call__(self, x: chex.Array, eval: bool) -> chex.Array:
         if eval or self.p == 0.0:
             return x
+        
         key = self.make_rng('stochastic_depth')
-        shape = (x.shape[0], *((1,) * (x.ndim - 1)))
-        mask = random.bernoulli(key, 1 - self.p, shape)
-        return x * mask / (1 - self.p)
+        mask = random.bernoulli(key, 1 - self.p, (x.shape[0], *((1,) * (x.ndim - 1))))
+        return (x * mask) / (1 - self.p)
 
 
 class SwinTransformerBlock(nn.Module):
@@ -139,7 +151,7 @@ class SwinTransformerBlock(nn.Module):
         cfg = self.config
         S = cfg.window_size
         
-        x = nn.LayerNorm()(embeddings)
+        x = nn.LayerNorm(dtype=cfg.dtype)(embeddings)
     
         if self.shifted:
             x = jnp.roll(x, shift=S//2, axis=(1, 2))
@@ -156,7 +168,8 @@ class SwinTransformerBlock(nn.Module):
             x = jnp.roll(x, shift=-S//2, axis=(1, 2))
             
         embeddings += StochasticDepth(cfg.stochastic_depth)(x, eval=eval)
-        x = nn.LayerNorm()(embeddings)
+        
+        x = nn.LayerNorm(dtype=cfg.dtype)(embeddings)
         x = MLP(cfg, self.level)(x, eval=eval)
         embeddings += StochasticDepth(cfg.stochastic_depth)(x, eval=eval)
         return x
@@ -165,22 +178,25 @@ class SwinTransformerBlock(nn.Module):
 class SwinTransformer(nn.Module):
     config: SwinTransformerConfig = SwinTransformerConfig()
     
-    def patch_embedding(self, x: chex.Array):
+    def patch_embedding(self, x: chex.Array) -> chex.Array:
         cfg = self.config
         x = nn.Conv(
             features=cfg.emb_dim,
             kernel_size=(cfg.patch_size, cfg.patch_size),
-            strides=cfg.patch_size
+            strides=cfg.patch_size,
+            dtype=cfg.dtype,
         )(x)
         return x
 
     def patch_merging(self, x: chex.Array) -> chex.Array:
-        x = jnp.pad(x, ((0, 0), (0, x.shape[1] % 2), (0, x.shape[2] % 2), (0, 0)))
+        cfg = self.config
+        x = jnp.pad(x, ((0, 0), (0, x.shape[1] % 2), 
+                        (0, x.shape[2] % 2), (0, 0)))
         x = window_partition(x, 2)
         x = x.reshape(*x.shape[:3], -1)
         
-        x = nn.LayerNorm()(x)
-        x = nn.Dense(x.shape[-1] // 2)(x)
+        x = nn.LayerNorm(dtype=cfg.dtype)(x)
+        x = nn.Dense(x.shape[-1] // 2, dtype=cfg.dtype)(x)
         return x
     
     @nn.compact
@@ -200,5 +216,5 @@ class SwinTransformer(nn.Module):
                 x = self.patch_merging(x)
 
         x = jnp.mean(x, axis=(1, 2))
-        x = nn.Dense(cfg.num_classes)(x)
+        x = nn.Dense(cfg.num_classes, dtype=cfg.dtype)(x)
         return x
