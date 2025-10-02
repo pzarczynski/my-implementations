@@ -1,0 +1,3 @@
+[submodule "swin_transformer"]
+	path = swin_transformer
+	url = git@github.com:pzarczynski/swin-cifar10
