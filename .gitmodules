@@ -1,3 +1,6 @@
 [submodule "swin_transformer"]
 	path = swin_transformer
 	url = git@github.com:pzarczynski/swin-cifar10
+[submodule "vae"]
+	path = vae
+	url = git@github.com:pzarczynski/autograd
